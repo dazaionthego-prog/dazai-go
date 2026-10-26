@@ -230,4 +230,139 @@ func sysBotInfo(bot *tele.Bot) map[string]interface{} {
 			"lib_version":  "v3",
 		}
 	})
-	if sy
+	if sysBotInfo == nil {
+		sysBotInfo = map[string]interface{}{
+			"username":     "@dazai",
+			"id":           0,
+			"is_premium":   false,
+			"lib":          "gopkg.in/telebot.v3",
+			"lib_version":  "v3",
+		}
+	}
+	return sysBotInfo
+}
+
+func sysSendSafe(bot *tele.Bot, m *tele.Message, text string) {
+	// Try normal send via _reply path
+	_, err := _reply(bot, m, text)
+	if err == nil {
+		return
+	}
+	// Fallback: strip tg-emoji
+	// simple regex-like replacement
+	for {
+		start := strings.Index(text, `<tg-emoji`)
+		if start == -1 {
+			break
+		}
+		endTag := strings.Index(text[start:], `>`)
+		if endTag == -1 {
+			break
+		}
+		endTag += start
+		close := strings.Index(text[endTag:], `</tg-emoji>`)
+		if close == -1 {
+			break
+		}
+		closeIdx := endTag + close + len(`</tg-emoji>`)
+		innerStart := strings.Index(text[endTag:closeIdx], `>`)
+		if innerStart == -1 {
+			break
+		}
+		inner := text[endTag+innerStart+1 : endTag+close]
+		text = text[:start] + inner + text[closeIdx:]
+	}
+	_reply(bot, m, text)
+}
+
+func SetupSys(bot *tele.Bot) {
+	sysLoadValidEmojiIDs(bot)
+	sysBotInfo(bot)
+
+	bot.Handle("/sys", func(c tele.Context) error {
+		m := c.Message()
+		if m == nil {
+			return nil
+		}
+		return sysRun(bot, m)
+	})
+	bot.Handle("/system", func(c tele.Context) error {
+		m := c.Message()
+		if m == nil {
+			return nil
+		}
+		return sysRun(bot, m)
+	})
+	bot.Handle("/status", func(c tele.Context) error {
+		m := c.Message()
+		if m == nil {
+			return nil
+		}
+		return sysRun(bot, m)
+	})
+}
+
+func sysRun(bot *tele.Bot, message *tele.Message) error {
+	osI := sysOSInfo()
+	goI := sysGoInfo()
+	cpuI := sysCPUInfo()
+	ramI := sysRAMInfo()
+	diskI := sysDiskInfo("/")
+	procI := sysProcInfo()
+	loadI := sysLoadAverage()
+	netI := sysNetInfo()
+	botI := sysBotInfo(bot)
+
+	cpuUsage := "N/A"
+	if v, ok := cpuI["usage_percent"]; ok && v != nil {
+		cpuUsage = fmt.Sprintf("%v%%", v)
+	}
+
+	lines := []string{
+		"<b>" + sysTg(sysEmojiMap["header"], "🖥") + " System Information</b>",
+		"━━━━━━━━━━━━━━━━━━",
+		"<b>OS:</b> <b><code>" + sysEsc(osI["system"]) + " " + sysEsc(osI["release"]) + "</code></b>",
+		"<b>Hostname:</b> <b><code>" + sysEsc(osI["hostname"]) + "</code></b>",
+		"<b>Arch:</b> <b><code>" + sysEsc(osI["machine"]) + "</code></b>",
+		"<b>Go:</b> <b><code>" + sysEsc(goI["version"]) + "</code></b>",
+		"<b>Lib:</b> <b><code>" + sysEsc(botI["lib"]) + " " + sysEsc(botI["lib_version"]) + "</code></b>",
+		"━━━━━━━━━━━━━━━━━━",
+		"<b>CPU:</b> <b><code>" + sysEsc(cpuI["model"]) + "</code></b>",
+		"<b>CPU Usage:</b> <b><code>" + sysEsc(cpuUsage) + "</code></b>",
+		"<b>Cores:</b> <b><code>" + fmt.Sprintf("%vP / %vL", cpuI["cores_physical"], cpuI["cores_logical"]) + "</code></b>",
+	}
+
+	if v, ok := cpuI["freq_mhz"]; ok && v != nil {
+		lines = append(lines, "<b>CPU Freq:</b> <b><code>"+sysEsc(v)+" MHz</code></b>")
+	}
+
+	lines = append(lines,
+		"<b>RAM:</b> <b><code>"+fmt.Sprintf("%.1f", ramI["used_mb"])+" / "+fmt.Sprintf("%.1f", ramI["total_mb"])+" MB ("+fmt.Sprintf("%.0f", ramI["percent"])+"%)</code></b>",
+		"<b>Disk:</b> <b><code>"+fmt.Sprintf("%.2f", diskI["used_gb"])+" / "+fmt.Sprintf("%.2f", diskI["total_gb"])+" GB ("+fmt.Sprintf("%.0f", diskI["percent"])+"%)</code></b>",
+	)
+
+	if loadI != nil {
+		lines = append(lines, "<b>Load Avg:</b> <b><code>"+fmt.Sprintf("%.2f", loadI["1m"])+" / "+fmt.Sprintf("%.2f", loadI["5m"])+" / "+fmt.Sprintf("%.2f", loadI["15m"])+"</code></b>")
+	}
+
+	lines = append(lines,
+		"━━━━━━━━━━━━━━━━━━",
+		"<b>Bot:</b> <b><code>"+sysEsc(botI["username"])+"</code></b>",
+		"<b>Bot ID:</b> <b><code>"+fmt.Sprintf("%v", botI["id"])+"</code></b>",
+		"<b>Premium:</b> <b><code>"+func() string {
+			if b, ok := botI["is_premium"].(bool); ok && b {
+				return "Yes"
+			}
+			return "No"
+		}()+"</code></b>",
+		"<b>PID:</b> <b><code>"+fmt.Sprintf("%v", procI["pid"])+"</code></b>",
+		"<b>RSS:</b> <b><code>"+fmt.Sprintf("%.1f", procI["rss_mb"].(float64))+" MB</code></b>",
+		"<b>Net Sent:</b> <b><code>"+fmt.Sprintf("%d", netI["bytes_sent"])+", B</code></b>",
+		"<b>Net Recv:</b> <b><code>"+fmt.Sprintf("%d", netI["bytes_recv"])+", B</code></b>",
+		"<b>Server Time:</b> <b><code>"+time.Now().Format("2006-01-02 15:04:05")+"</code></b>",
+		"━━━━━━━━━━━━━━━━━━",
+	)
+
+	sysSendSafe(bot, message, strings.Join(lines, "\n"))
+	return nil
+}
