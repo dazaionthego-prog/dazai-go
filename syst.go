@@ -7,86 +7,16 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tele "gopkg.in/telebot.v3"
-)
-
-var (
-	sysValidEmojiOnce sync.Once
-	sysValidEmojiIDs  map[string]bool
-	sysBotInfoOnce    sync.Once
-	sysBotInfo        map[string]interface{}
 )
 
 const (
 	sysHeaderEmojiID = "5445224894386172410"
 )
 
-var sysEmojiMap = map[string]string{
-	"header": sysHeaderEmojiID,
-}
-
-func sysLoadValidEmojiIDs(bot *tele.Bot) map[string]bool {
-	sysValidEmojiOnce.Do(func() {
-		sysValidEmojiIDs = map[string]bool{}
-		ids := make([]string, 0, len(sysEmojiMap))
-		seen := map[string]bool{}
-		for _, v := range sysEmojiMap {
-			if v == "" {
-				continue
-			}
-			if !seen[v] {
-				seen[v] = true
-				ids = append(ids, v)
-			}
-		}
-		if len(ids) == 0 {
-			return
-		}
-		// Try to validate via Telegram API if available
-		// telebot.v3 may not expose GetCustomEmojiStickers in all versions; best effort
-		type customEmojiGetter interface {
-			GetCustomEmojiStickers([]string) ([]tele.Sticker, error)
-		}
-		if g, ok := interface{}(bot).(customEmojiGetter); ok {
-			for i := 0; i < len(ids); i += 200 {
-				end := i + 200
-				if end > len(ids) {
-					end = len(ids)
-				}
-				stks, err := g.GetCustomEmojiStickers(ids[i:end])
-				if err != nil {
-					continue
-				}
-				for _, s := range stks {
-					if s != nil && s.CustomEmojiID != "" {
-						sysValidEmojiIDs[s.CustomEmojiID] = true
-					}
-				}
-			}
-			return
-		}
-		// Fallback: assume valid to keep identical tg-emoji tags
-		for _, id := range ids {
-			sysValidEmojiIDs[id] = true
-		}
-	})
-	if sysValidEmojiIDs == nil {
-		sysValidEmojiIDs = map[string]bool{}
-	}
-	return sysValidEmojiIDs
-}
-
 func sysTg(emojiID string, fallback string) string {
-	valid := sysLoadValidEmojiIDs(nil)
-	if valid != nil && emojiID != "" {
-		if ok := valid[emojiID]; ok {
-			return `<tg-emoji emoji-id="` + html.EscapeString(emojiID) + `">` + fallback + `</tg-emoji>`
-		}
-		return fallback
-	}
 	if emojiID != "" {
 		return `<tg-emoji emoji-id="` + html.EscapeString(emojiID) + `">` + fallback + `</tg-emoji>`
 	}
@@ -152,29 +82,23 @@ func sysCPUInfo() map[string]interface{} {
 }
 
 func sysRAMInfo() map[string]float64 {
-	info := map[string]float64{"total_mb": 0, "used_mb": 0, "percent": 0}
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	// total not directly available, use sysinfo? best effort
-	info["used_mb"] = float64(m.Alloc) / 1024.0 / 1024.0
-	return info
+	return map[string]float64{"total_mb": 0, "used_mb": float64(m.Alloc) / 1024.0 / 1024.0, "percent": 0}
 }
 
 func sysDiskInfo(path string) map[string]float64 {
-	info := map[string]float64{"total_gb": 0, "used_gb": 0, "free_gb": 0, "percent": 0}
-	return info
+	return map[string]float64{"total_gb": 0, "used_gb": 0, "free_gb": 0, "percent": 0}
 }
 
 func sysProcInfo() map[string]interface{} {
-	info := map[string]interface{}{
-		"pid":         os.Getpid(),
-		"rss_mb":      0.0,
-		"cpu_percent": 0,
-	}
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	info["rss_mb"] = float64(m.Sys) / 1024.0 / 1024.0
-	return info
+	return map[string]interface{}{
+		"pid":         os.Getpid(),
+		"rss_mb":      float64(m.Sys) / 1024.0 / 1024.0,
+		"cpu_percent": 0,
+	}
 }
 
 func sysLoadAverage() map[string]float64 {
@@ -199,86 +123,62 @@ func sysLoadAverage() map[string]float64 {
 }
 
 func sysNetInfo() map[string]uint64 {
-	info := map[string]uint64{"bytes_sent": 0, "bytes_recv": 0}
-	return info
+	return map[string]uint64{"bytes_sent": 0, "bytes_recv": 0}
 }
 
-func sysBotInfo(bot *tele.Bot) map[string]interface{} {
-	sysBotInfoOnce.Do(func() {
-		me, err := bot.Me()
-		if err != nil || me == nil {
-			sysBotInfo = map[string]interface{}{
-				"username": "@dazai",
-				"id":       0,
-				"is_premium": false,
-				"lib":      "gopkg.in/telebot.v3",
-				"lib_version": "v3",
-			}
-			return
-		}
-		uname := me.Username
-		if uname != "" {
-			uname = "@" + uname
+func sysGetBotInfo(bot *tele.Bot) map[string]interface{} {
+	me := bot.Me
+	uname := ""
+	if me != nil {
+		if me.Username != "" {
+			uname = "@" + me.Username
 		} else if me.FirstName != "" {
 			uname = me.FirstName
 		}
-		sysBotInfo = map[string]interface{}{
+		return map[string]interface{}{
 			"username":     uname,
 			"id":           me.ID,
 			"is_premium":   false,
 			"lib":          "gopkg.in/telebot.v3",
 			"lib_version":  "v3",
 		}
-	})
-	if sysBotInfo == nil {
-		sysBotInfo = map[string]interface{}{
-			"username":     "@dazai",
-			"id":           0,
-			"is_premium":   false,
-			"lib":          "gopkg.in/telebot.v3",
-			"lib_version":  "v3",
-		}
 	}
-	return sysBotInfo
+	return map[string]interface{}{
+		"username":     "@dazai",
+		"id":           0,
+		"is_premium":   false,
+		"lib":          "gopkg.in/telebot.v3",
+		"lib_version":  "v3",
+	}
 }
 
-func sysSendSafe(bot *tele.Bot, m *tele.Message, text string) {
-	// Try normal send via _reply path
-	_, err := _reply(bot, m, text)
-	if err == nil {
-		return
-	}
-	// Fallback: strip tg-emoji
-	// simple regex-like replacement
+func sysStripTgEmoji(s string) string {
 	for {
-		start := strings.Index(text, `<tg-emoji`)
+		start := strings.Index(s, "<tg-emoji")
 		if start == -1 {
 			break
 		}
-		endTag := strings.Index(text[start:], `>`)
+		endTag := strings.Index(s[start:], ">")
 		if endTag == -1 {
 			break
 		}
 		endTag += start
-		close := strings.Index(text[endTag:], `</tg-emoji>`)
+		close := strings.Index(s[endTag:], "</tg-emoji>")
 		if close == -1 {
 			break
 		}
-		closeIdx := endTag + close + len(`</tg-emoji>`)
-		innerStart := strings.Index(text[endTag:closeIdx], `>`)
+		closeIdx := endTag + close + len("</tg-emoji>")
+		innerStart := strings.Index(s[endTag:closeIdx], ">")
 		if innerStart == -1 {
 			break
 		}
-		inner := text[endTag+innerStart+1 : endTag+close]
-		text = text[:start] + inner + text[closeIdx:]
+		inner := s[endTag+innerStart+1 : endTag+close]
+		s = s[:start] + inner + s[closeIdx:]
 	}
-	_reply(bot, m, text)
+	return s
 }
 
 func SetupSys(bot *tele.Bot) {
-	sysLoadValidEmojiIDs(bot)
-	sysBotInfo(bot)
-
 	bot.Handle("/sys", func(c tele.Context) error {
 		m := c.Message()
 		if m == nil {
@@ -311,7 +211,7 @@ func sysRun(bot *tele.Bot, message *tele.Message) error {
 	procI := sysProcInfo()
 	loadI := sysLoadAverage()
 	netI := sysNetInfo()
-	botI := sysBotInfo(bot)
+	botI := sysGetBotInfo(bot)
 
 	cpuUsage := "N/A"
 	if v, ok := cpuI["usage_percent"]; ok && v != nil {
@@ -319,7 +219,7 @@ func sysRun(bot *tele.Bot, message *tele.Message) error {
 	}
 
 	lines := []string{
-		"<b>" + sysTg(sysEmojiMap["header"], "🖥") + " System Information</b>",
+		"<b>" + sysTg(sysHeaderEmojiID, "🖥") + " System Information</b>",
 		"━━━━━━━━━━━━━━━━━━",
 		"<b>OS:</b> <b><code>" + sysEsc(osI["system"]) + " " + sysEsc(osI["release"]) + "</code></b>",
 		"<b>Hostname:</b> <b><code>" + sysEsc(osI["hostname"]) + "</code></b>",
@@ -345,16 +245,15 @@ func sysRun(bot *tele.Bot, message *tele.Message) error {
 		lines = append(lines, "<b>Load Avg:</b> <b><code>"+fmt.Sprintf("%.2f", loadI["1m"])+" / "+fmt.Sprintf("%.2f", loadI["5m"])+" / "+fmt.Sprintf("%.2f", loadI["15m"])+"</code></b>")
 	}
 
+	prem := "No"
+	if b, ok := botI["is_premium"].(bool); ok && b {
+		prem = "Yes"
+	}
 	lines = append(lines,
 		"━━━━━━━━━━━━━━━━━━",
 		"<b>Bot:</b> <b><code>"+sysEsc(botI["username"])+"</code></b>",
 		"<b>Bot ID:</b> <b><code>"+fmt.Sprintf("%v", botI["id"])+"</code></b>",
-		"<b>Premium:</b> <b><code>"+func() string {
-			if b, ok := botI["is_premium"].(bool); ok && b {
-				return "Yes"
-			}
-			return "No"
-		}()+"</code></b>",
+		"<b>Premium:</b> <b><code>"+prem+"</code></b>",
 		"<b>PID:</b> <b><code>"+fmt.Sprintf("%v", procI["pid"])+"</code></b>",
 		"<b>RSS:</b> <b><code>"+fmt.Sprintf("%.1f", procI["rss_mb"].(float64))+" MB</code></b>",
 		"<b>Net Sent:</b> <b><code>"+fmt.Sprintf("%d", netI["bytes_sent"])+", B</code></b>",
@@ -363,6 +262,9 @@ func sysRun(bot *tele.Bot, message *tele.Message) error {
 		"━━━━━━━━━━━━━━━━━━",
 	)
 
-	sysSendSafe(bot, message, strings.Join(lines, "\n"))
+	text := strings.Join(lines, "\n")
+	if _, err := _reply(bot, message, text); err != nil {
+		_reply(bot, message, sysStripTgEmoji(text))
+	}
 	return nil
 }
